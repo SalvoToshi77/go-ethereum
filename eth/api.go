@@ -611,3 +611,12 @@ func (api *PrivateDebugAPI) GetAccessibleState(from, to rpc.BlockNumber) (uint64
 	}
 	return 0, fmt.Errorf("No state found")
 }
+
+type gcPolicy struct {
+	FlushFrequency int
+}
+
+func (api *PrivateDebugAPI) SetGCPolicy(policy gcPolicy) error {
+	api.eth.blockchain.SetGCMode(policy.FlushFrequency)
+	return nil
+}

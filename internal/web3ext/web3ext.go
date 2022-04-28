@@ -484,6 +484,11 @@ web3._extend({
 			name: 'dbAncients',
 			call: 'debug_dbAncients',
 			params: 0
+        }),
+        new web3._extend.Method({
+			name: 'setGCPolicy',
+			call: 'debug_setGCPolicy',
+			params: 1
 		}),
 	],
 	properties: []

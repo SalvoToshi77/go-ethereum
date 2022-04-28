@@ -81,6 +81,8 @@ var (
 
 	errInsertionInterrupted = errors.New("insertion is interrupted")
 	errChainStopped         = errors.New("blockchain is stopped")
+
+	lastWrite uint64
 )
 
 const (
@@ -162,10 +164,11 @@ type BlockChain struct {
 	chainConfig *params.ChainConfig // Chain & network configuration
 	cacheConfig *CacheConfig        // Cache configuration for pruning
 
-	db     ethdb.Database // Low level persistent database to store final content in
-	snaps  *snapshot.Tree // Snapshot tree for fast trie leaf access
-	triegc *prque.Prque   // Priority queue mapping block numbers to tries to gc
-	gcproc time.Duration  // Accumulates canonical block processing for trie dumping
+	db            ethdb.Database // Low level persistent database to store final content in
+	snaps         *snapshot.Tree // Snapshot tree for fast trie leaf access
+	triegc        *prque.Prque   // Priority queue mapping block numbers to tries to gc
+	gcproc        time.Duration  // Accumulates canonical block processing for trie dumping
+	trieFlushFreq uint64         // # blocks after which to flush the current in-memory trie to disk (0 = only consider time limit, 1 = archive mode)
 
 	// txLookupLimit is the maximum number of blocks from head whose tx indices
 	// are reserved:
@@ -247,6 +250,9 @@ func NewBlockChain(db ethdb.Database, cacheConfig *CacheConfig, chainConfig *par
 		futureBlocks:  futureBlocks,
 		engine:        engine,
 		vmConfig:      vmConfig,
+	}
+	if cacheConfig.TrieDirtyDisabled {
+		bc.trieFlushFreq = 1
 	}
 	bc.forker = NewForkChoice(bc, shouldPreserve)
 	bc.validator = NewBlockValidator(chainConfig, bc, engine)
@@ -832,7 +838,7 @@ func (bc *BlockChain) Stop() {
 	//  - HEAD:     So we don't need to reprocess any blocks in the general case
 	//  - HEAD-1:   So we don't do large reorgs if our HEAD becomes an uncle
 	//  - HEAD-127: So we have a hard limit on the number of blocks reexecuted
-	if !bc.cacheConfig.TrieDirtyDisabled {
+	if freq := atomic.LoadUint64(&bc.trieFlushFreq); freq != 1 {
 		triedb := bc.stateCache.TrieDB()
 
 		for _, offset := range []uint64{0, 1, TriesInMemory - 1} {
@@ -1175,8 +1181,6 @@ func (bc *BlockChain) InsertReceiptChain(blockChain types.Blocks, receiptChain [
 	return 0, nil
 }
 
-var lastWrite uint64
-
 // writeBlockWithoutState writes only the block and its metadata to the database,
 // but does not write any state. This is used to construct competing side forks
 // up to the point where they exceed the canonical total difficulty.
@@ -1237,14 +1241,16 @@ func (bc *BlockChain) writeBlockWithState(block *types.Block, receipts []*types.
 	}
 	triedb := bc.stateCache.TrieDB()
 
+	freq := atomic.LoadUint64(&bc.trieFlushFreq)
 	// If we're running an archive node, always flush
-	if bc.cacheConfig.TrieDirtyDisabled {
+	if freq == 1 {
 		return triedb.Commit(root, false, nil)
 	} else {
 		// Full but not archive node, do proper garbage collection
 		triedb.Reference(root, common.Hash{}) // metadata reference to keep trie alive
 		bc.triegc.Push(root, -int64(block.NumberU64()))
 
+		// Note: flush frequency is not considered for the first TriesInMemory blocks.
 		if current := block.NumberU64(); current > TriesInMemory {
 			// If we exceeded our memory allowance, flush matured singleton nodes to disk
 			var (
@@ -1256,9 +1262,14 @@ func (bc *BlockChain) writeBlockWithState(block *types.Block, receipts []*types.
 			}
 			// Find the next state trie we need to commit
 			chosen := current - TriesInMemory
-
-			// If we exceeded out time allowance, flush an entire trie to disk
-			if bc.gcproc > bc.cacheConfig.TrieTimeLimit {
+			doFlush := bc.gcproc > bc.cacheConfig.TrieTimeLimit
+			if freq > 1 {
+				sinceFlush := chosen - lastWrite
+				doFlush = doFlush || sinceFlush >= freq
+			}
+			// If we exceeded out time allowance or passed number of blocks threshold,
+			// then flush an entire trie to disk
+			if doFlush {
 				// If the header is missing (canonical chain behind), we're reorging a low
 				// diff sidechain. Suspend committing until this operation is completed.
 				header := bc.GetHeaderByNumber(chosen)
@@ -2355,4 +2366,8 @@ func (bc *BlockChain) InsertHeaderChain(chain []*types.Header, checkFreq int) (i
 	defer bc.chainmu.Unlock()
 	_, err := bc.hc.InsertHeaderChain(chain, start, bc.forker)
 	return 0, err
+}
+
+func (bc *BlockChain) SetGCMode(flushFreq int) {
+	atomic.StoreUint64(&bc.trieFlushFreq, uint64(flushFreq))
 }
