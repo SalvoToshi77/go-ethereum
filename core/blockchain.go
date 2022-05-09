@@ -1,4 +1,4 @@
-// Copyright 2014 The go-ethereum Authors
+// Copyright 2022 The go-ethereum Authors
 // This file is part of the go-ethereum library.
 //
 // The go-ethereum library is free software: you can redistribute it and/or modify
@@ -81,8 +81,6 @@ var (
 
 	errInsertionInterrupted = errors.New("insertion is interrupted")
 	errChainStopped         = errors.New("blockchain is stopped")
-
-	lastWrite uint64
 )
 
 const (
@@ -161,14 +159,16 @@ var defaultCacheConfig = &CacheConfig{
 // included in the canonical one where as GetBlockByNumber always represents the
 // canonical chain.
 type BlockChain struct {
-	chainConfig *params.ChainConfig // Chain & network configuration
-	cacheConfig *CacheConfig        // Cache configuration for pruning
+	// trieFlushFreq is accessed atomically and needs to be 64-bit aligned.
+	trieFlushFreq uint64              // # blocks after which to flush the current in-memory trie to disk (0 = only consider time limit, 1 = archive mode)
+	chainConfig   *params.ChainConfig // Chain & network configuration
+	cacheConfig   *CacheConfig        // Cache configuration for pruning
 
-	db            ethdb.Database // Low level persistent database to store final content in
-	snaps         *snapshot.Tree // Snapshot tree for fast trie leaf access
-	triegc        *prque.Prque   // Priority queue mapping block numbers to tries to gc
-	gcproc        time.Duration  // Accumulates canonical block processing for trie dumping
-	trieFlushFreq uint64         // # blocks after which to flush the current in-memory trie to disk (0 = only consider time limit, 1 = archive mode)
+	db        ethdb.Database // Low level persistent database to store final content in
+	snaps     *snapshot.Tree // Snapshot tree for fast trie leaf access
+	triegc    *prque.Prque   // Priority queue mapping block numbers to tries to gc
+	gcproc    time.Duration  // Accumulates canonical block processing for trie dumping
+	lastWrite uint64         // Last block when the state was flushed
 
 	// txLookupLimit is the maximum number of blocks from head whose tx indices
 	// are reserved:
@@ -1268,7 +1268,7 @@ func (bc *BlockChain) writeBlockWithState(block *types.Block, receipts []*types.
 	// Find the next state trie we need to commit
 	var (
 		chosen     = current - TriesInMemory
-		sinceFlush = chosen - lastWrite
+		sinceFlush = chosen - bc.lastWrite
 		doFlush    = bc.gcproc > bc.cacheConfig.TrieTimeLimit
 	)
 	if freq > 1 {
@@ -1285,12 +1285,12 @@ func (bc *BlockChain) writeBlockWithState(block *types.Block, receipts []*types.
 		} else {
 			// If we're exceeding limits but haven't reached a large enough memory gap,
 			// warn the user that the system is becoming unstable.
-			if chosen < lastWrite+TriesInMemory && bc.gcproc >= 2*bc.cacheConfig.TrieTimeLimit {
-				log.Info("State in memory for too long, committing", "time", bc.gcproc, "allowance", bc.cacheConfig.TrieTimeLimit, "optimum", float64(chosen-lastWrite)/TriesInMemory)
+			if chosen < bc.lastWrite+TriesInMemory && bc.gcproc >= 2*bc.cacheConfig.TrieTimeLimit {
+				log.Info("State in memory for too long, committing", "time", bc.gcproc, "allowance", bc.cacheConfig.TrieTimeLimit, "optimum", float64(chosen-bc.lastWrite)/TriesInMemory)
 			}
 			// Flush an entire trie and restart the counters
 			triedb.Commit(header.Root, true, nil)
-			lastWrite = chosen
+			bc.lastWrite = chosen
 			bc.gcproc = 0
 		}
 	}
