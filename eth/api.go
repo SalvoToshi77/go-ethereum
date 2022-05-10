@@ -612,11 +612,12 @@ func (api *PrivateDebugAPI) GetAccessibleState(from, to rpc.BlockNumber) (uint64
 	return 0, fmt.Errorf("No state found")
 }
 
-type gcPolicy struct {
-	FlushFrequency int
-}
-
-func (api *PrivateDebugAPI) SetGCPolicy(policy gcPolicy) error {
-	api.eth.blockchain.SetGCMode(policy.FlushFrequency)
+// SetTrieFlushInterval configures how often (i.e. after how many blocks) in-memory tries
+// are persisted to disk. The acceptable values are:
+// - interval = 0: uses the default time-based interval
+// - interval = 1: persist the trie for every block (i.e. archive mode)
+// - interval > 1: persist the trie after every `interval` block
+func (api *PrivateDebugAPI) SetTrieFlushInterval(interval uint64) error {
+	api.eth.blockchain.SetTrieFlushInterval(interval)
 	return nil
 }

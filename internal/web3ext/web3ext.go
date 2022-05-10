@@ -486,8 +486,8 @@ web3._extend({
 			params: 0
         }),
         new web3._extend.Method({
-			name: 'setGCPolicy',
-			call: 'debug_setGCPolicy',
+			name: 'setTrieFlushInterval',
+			call: 'debug_setTrieFlushInterval',
 			params: 1
 		}),
 	],

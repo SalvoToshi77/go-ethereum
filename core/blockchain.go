@@ -159,10 +159,10 @@ var defaultCacheConfig = &CacheConfig{
 // included in the canonical one where as GetBlockByNumber always represents the
 // canonical chain.
 type BlockChain struct {
-	// trieFlushFreq is accessed atomically and needs to be 64-bit aligned.
-	trieFlushFreq uint64              // # blocks after which to flush the current in-memory trie to disk (0 = only consider time limit, 1 = archive mode)
-	chainConfig   *params.ChainConfig // Chain & network configuration
-	cacheConfig   *CacheConfig        // Cache configuration for pruning
+	// trieFlushInterval is accessed atomically and needs to be 64-bit aligned.
+	trieFlushInterval uint64              // # blocks after which to flush the current in-memory trie to disk (0 = only consider time limit, 1 = archive mode)
+	chainConfig       *params.ChainConfig // Chain & network configuration
+	cacheConfig       *CacheConfig        // Cache configuration for pruning
 
 	db        ethdb.Database // Low level persistent database to store final content in
 	snaps     *snapshot.Tree // Snapshot tree for fast trie leaf access
@@ -252,7 +252,7 @@ func NewBlockChain(db ethdb.Database, cacheConfig *CacheConfig, chainConfig *par
 		vmConfig:      vmConfig,
 	}
 	if cacheConfig.TrieDirtyDisabled {
-		bc.trieFlushFreq = 1
+		bc.trieFlushInterval = 1
 	}
 	bc.forker = NewForkChoice(bc, shouldPreserve)
 	bc.validator = NewBlockValidator(chainConfig, bc, engine)
@@ -838,7 +838,7 @@ func (bc *BlockChain) Stop() {
 	//  - HEAD:     So we don't need to reprocess any blocks in the general case
 	//  - HEAD-1:   So we don't do large reorgs if our HEAD becomes an uncle
 	//  - HEAD-127: So we have a hard limit on the number of blocks reexecuted
-	if freq := atomic.LoadUint64(&bc.trieFlushFreq); freq != 1 {
+	if interval := atomic.LoadUint64(&bc.trieFlushInterval); interval != 1 {
 		triedb := bc.stateCache.TrieDB()
 
 		for _, offset := range []uint64{0, 1, TriesInMemory - 1} {
@@ -1240,11 +1240,11 @@ func (bc *BlockChain) writeBlockWithState(block *types.Block, receipts []*types.
 		return err
 	}
 	var (
-		triedb = bc.stateCache.TrieDB()
-		freq   = atomic.LoadUint64(&bc.trieFlushFreq)
+		triedb   = bc.stateCache.TrieDB()
+		interval = atomic.LoadUint64(&bc.trieFlushInterval)
 	)
 	// If we're running an archive node, always flush
-	if freq == 1 {
+	if interval == 1 {
 		return triedb.Commit(root, false, nil)
 	}
 
@@ -1252,7 +1252,7 @@ func (bc *BlockChain) writeBlockWithState(block *types.Block, receipts []*types.
 	triedb.Reference(root, common.Hash{}) // metadata reference to keep trie alive
 	bc.triegc.Push(root, -int64(block.NumberU64()))
 
-	// Note: flush frequency is not considered for the first TriesInMemory blocks.
+	// Note: flush interval is not considered for the first TriesInMemory blocks.
 	current := block.NumberU64()
 	if current <= TriesInMemory {
 		return nil
@@ -1271,12 +1271,13 @@ func (bc *BlockChain) writeBlockWithState(block *types.Block, receipts []*types.
 		sinceFlush = chosen - bc.lastWrite
 		doFlush    = bc.gcproc > bc.cacheConfig.TrieTimeLimit
 	)
-	if freq > 1 {
-		doFlush = doFlush || sinceFlush >= freq
+	if interval > 1 {
+		doFlush = doFlush || sinceFlush >= interval
 	}
 	// If we exceeded out time allowance or passed number of blocks threshold,
 	// then flush an entire trie to disk
 	if doFlush {
+		log.Warn("Flushing trie", "current", current, "chosen", chosen, "lastWrite", bc.lastWrite, "sinceFlush", sinceFlush, "interval", interval)
 		// If the header is missing (canonical chain behind), we're reorging a low
 		// diff sidechain. Suspend committing until this operation is completed.
 		header := bc.GetHeaderByNumber(chosen)
@@ -2373,6 +2374,8 @@ func (bc *BlockChain) InsertHeaderChain(chain []*types.Header, checkFreq int) (i
 	return 0, err
 }
 
-func (bc *BlockChain) SetGCMode(flushFreq int) {
-	atomic.StoreUint64(&bc.trieFlushFreq, uint64(flushFreq))
+// SetTrieFlushInterval configures how often in-memory tries are persisted to disk.
+// It is thread-safe and can be called repeatedly without side-effects.
+func (bc *BlockChain) SetTrieFlushInterval(interval uint64) {
+	atomic.StoreUint64(&bc.trieFlushInterval, interval)
 }
