@@ -84,6 +84,14 @@ func (b *testBackend) HeaderByHash(ctx context.Context, hash common.Hash) (*type
 	return rawdb.ReadHeader(b.db, hash, *number), nil
 }
 
+func (b *testBackend) BlockByHash(ctx context.Context, hash common.Hash) (*types.Block, error) {
+	number := rawdb.ReadHeaderNumber(b.db, hash)
+	if number == nil {
+		return nil, nil
+	}
+	return rawdb.ReadBlock(b.db, hash, *number), nil
+}
+
 func (b *testBackend) GetReceipts(ctx context.Context, hash common.Hash) (types.Receipts, error) {
 	if number := rawdb.ReadHeaderNumber(b.db, hash); number != nil {
 		return rawdb.ReadReceipts(b.db, hash, *number, params.TestChainConfig), nil
