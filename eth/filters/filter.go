@@ -294,6 +294,7 @@ func (f *Filter) checkMatches(ctx context.Context, header *types.Header) (logs [
 		// Log metadata is already filled in
 		if txLogs[0].TxHash != (common.Hash{}) {
 			logs = append(logs, txLogs...)
+			continue
 		}
 		// Resolve full logs. E.g. EthAPIBackend doesn't resolve by default.
 		body, err := lazyLoadBlock()
