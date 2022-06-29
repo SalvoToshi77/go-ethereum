@@ -19,6 +19,7 @@ package filters
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math/big"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -34,6 +35,7 @@ type Backend interface {
 	ChainDb() ethdb.Database
 	HeaderByNumber(ctx context.Context, blockNr rpc.BlockNumber) (*types.Header, error)
 	HeaderByHash(ctx context.Context, blockHash common.Hash) (*types.Header, error)
+	BlockByHash(ctx context.Context, blockHash common.Hash) (*types.Block, error)
 	GetReceipts(ctx context.Context, blockHash common.Hash) (types.Receipts, error)
 	GetLogs(ctx context.Context, blockHash common.Hash) ([][]*types.Log, error)
 	PendingBlockAndReceipts() (*types.Block, types.Receipts)
@@ -261,32 +263,60 @@ func (f *Filter) blockLogs(ctx context.Context, header *types.Header) (logs []*t
 // checkMatches checks if the receipts belonging to the given header contain any log events that
 // match the filter criteria. This function is called when the bloom filter signals a potential match.
 func (f *Filter) checkMatches(ctx context.Context, header *types.Header) (logs []*types.Log, err error) {
+	var (
+		block  *types.Block
+		number = header.Number.Uint64()
+		hash   = header.Hash()
+	)
+	// Fetch block only once and only when its needed
+	lazyLoadBlock := func() (*types.Block, error) {
+		if block != nil {
+			return block, nil
+		}
+		var err error
+		block, err = f.backend.BlockByHash(ctx, hash)
+		return block, err
+	}
 	// Get the logs of the block
-	logsList, err := f.backend.GetLogs(ctx, header.Hash())
+	logsList, err := f.backend.GetLogs(ctx, hash)
 	if err != nil {
 		return nil, err
 	}
-	var unfiltered []*types.Log
-	for _, logs := range logsList {
-		unfiltered = append(unfiltered, logs...)
+	filtered := make([][]*types.Log, len(logsList))
+	for i, txLogs := range logsList {
+		filtered[i] = filterLogs(txLogs, nil, nil, f.addresses, f.topics)
 	}
-	logs = filterLogs(unfiltered, nil, nil, f.addresses, f.topics)
-	if len(logs) > 0 {
-		// We have matching logs, check if we need to resolve full logs via the light client
-		if logs[0].TxHash == (common.Hash{}) {
-			receipts, err := f.backend.GetReceipts(ctx, header.Hash())
-			if err != nil {
-				return nil, err
-			}
-			unfiltered = unfiltered[:0]
-			for _, receipt := range receipts {
-				unfiltered = append(unfiltered, receipt.Logs...)
-			}
-			logs = filterLogs(unfiltered, nil, nil, f.addresses, f.topics)
+	var logIndex uint
+	for i, txLogs := range filtered {
+		// No remaining logs after filtering
+		if len(txLogs) == 0 {
+			continue
 		}
-		return logs, nil
+		// Log metadata is already filled in
+		if txLogs[0].TxHash != (common.Hash{}) {
+			logs = append(logs, txLogs...)
+		}
+		// Resolve full logs. E.g. EthAPIBackend doesn't resolve by default.
+		body, err := lazyLoadBlock()
+		if err != nil {
+			return nil, err
+		}
+		txHash := body.Transactions()[i].Hash()
+		for _, log := range txLogs {
+			log.BlockNumber = number
+			log.BlockHash = hash
+			log.TxHash = txHash
+			log.TxIndex = uint(i)
+			log.Index = logIndex
+			logIndex++
+			logs = append(logs, log)
+		}
 	}
-	return nil, nil
+	// No match in this block, we avoided a db access
+	if block == nil {
+		fmt.Printf("No match in block %v\n", number)
+	}
+	return logs, nil
 }
 
 // pendingLogs returns the logs matching the filter criteria within the pending block.

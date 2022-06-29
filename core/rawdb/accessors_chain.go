@@ -718,8 +718,7 @@ func deriveLogFields(receipts []*receiptLogs, hash common.Hash, number uint64, t
 }
 
 // ReadLogs retrieves the logs for all transactions in a block. The log fields
-// are populated with metadata. In case the receipts or the block body
-// are not found, a nil is returned.
+// are NOT populated with metadata. In case the receipts are not found, a nil is returned.
 func ReadLogs(db ethdb.Reader, hash common.Hash, number uint64, config *params.ChainConfig) [][]*types.Log {
 	// Retrieve the flattened receipt slice
 	data := ReadReceiptsRLP(db, hash, number)
@@ -734,16 +733,6 @@ func ReadLogs(db ethdb.Reader, hash common.Hash, number uint64, config *params.C
 			return logs
 		}
 		log.Error("Invalid receipt array RLP", "hash", hash, "err", err)
-		return nil
-	}
-
-	body := ReadBody(db, hash, number)
-	if body == nil {
-		log.Error("Missing body but have receipt", "hash", hash, "number", number)
-		return nil
-	}
-	if err := deriveLogFields(receipts, hash, number, body.Transactions); err != nil {
-		log.Error("Failed to derive block receipts fields", "hash", hash, "number", number, "err", err)
 		return nil
 	}
 	logs := make([][]*types.Log, len(receipts))

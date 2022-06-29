@@ -837,6 +837,10 @@ func (fb *filterBackend) HeaderByHash(ctx context.Context, hash common.Hash) (*t
 	return fb.bc.GetHeaderByHash(hash), nil
 }
 
+func (fb *filterBackend) BlockByHash(ctx context.Context, hash common.Hash) (*types.Block, error) {
+	return fb.bc.GetBlockByHash(hash), nil
+}
+
 func (fb *filterBackend) PendingBlockAndReceipts() (*types.Block, types.Receipts) {
 	return fb.backend.pendingBlock, fb.backend.pendingReceipts
 }
