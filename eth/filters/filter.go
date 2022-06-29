@@ -19,7 +19,6 @@ package filters
 import (
 	"context"
 	"errors"
-	"fmt"
 	"math/big"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -311,10 +310,6 @@ func (f *Filter) checkMatches(ctx context.Context, header *types.Header) (logs [
 			logIndex++
 			logs = append(logs, log)
 		}
-	}
-	// No match in this block, we avoided a db access
-	if block == nil {
-		fmt.Printf("No match in block %v\n", number)
 	}
 	return logs, nil
 }
